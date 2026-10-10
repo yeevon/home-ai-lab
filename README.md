@@ -1,148 +1,112 @@
 # home-ai-lab
 
-A self-hosted, multi-node AI coding and research stack built on consumer hardware, with private web search, agent audit logging, and an evaluation harness that measures how reliably local language models handle agentic tool use.
+A home AI lab with a working, self-hosted web search service connected to Cline over the local network.
 
-> **Status:** In active development. See the [Roadmap](#roadmap) for what is working today and what is in progress.
+**Current status:** Docker is installed on the Ubuntu XPS server. SearXNG and its MCP server run in Docker, their ports are published for LAN access, and Cline is configured to use the remote MCP endpoint. Search and page reading have been verified.
 
-## Why this exists
+This README describes the setup and project scope at an epic level. [CHANGELOG.md](CHANGELOG.md) records completed work. GitHub Projects is the place for planned work and task-level progress.
 
-Cloud AI coding assistants are capable, but they come with usage caps, subscriptions, and code leaving your machine. I wanted a setup that runs entirely on hardware I already own, keeps my data on my network, and gives me an honest answer to a practical question:
+## What is set up
 
-**Can small local models be trusted to act as coding agents, and where exactly do they fail?**
+| Component | Implemented state |
+|-----------|-------------------|
+| Ubuntu XPS server | Docker installed; server address used by the client is `<Internal-IP>`. |
+| SearXNG | `searxng/searxng:latest` image pulled and running as the `searxng` container; host port `8080` published. |
+| SearXNG MCP server | `isokoliuk/mcp-searxng:latest` image pulled and running as `mcp-searxng`; host port `3000` published. |
+| Container connection | Both services use `search-network`; MCP connects to SearXNG at `http://searxng:8080`. |
+| Cline connection | Enabled Streamable HTTP connection to `http://<Internal-IP>:3000/mcp`. |
+| Cline project rules | `.clinerules/` and `memory-bank/` moved from `second-brain` to this repository. |
 
-While building the stack I watched local models fake tool calls, loop on shell quoting errors, and report success on tasks they never completed. Instead of treating that as a dead end, this project turns those failures into measurable, repeatable tests.
+The server setup was performed manually. There is no committed Docker Compose deployment or server provisioning configuration in this repository.
 
-## What it does
-
-- **Local agentic coding** with [Cline](https://github.com/cline/cline) driving a local model through [Ollama](https://ollama.com)
-- **Inline code autocomplete** with [Continue](https://github.com/continuedev/continue), offloaded to a separate server so the main GPU stays free for the agent
-- **Private web search** through a self-hosted [SearXNG](https://github.com/searxng/searxng) instance, exposed to the agent through the [mcp-searxng](https://github.com/ihor-sokoliuk/mcp-searxng) MCP server. No API keys, no third-party search accounts.
-- **Agent audit trail** that logs every task and tool call, so agent behavior can be reviewed and improved over time *(in progress)*
-- **Evaluation harness** that scores local models on tool-call validity, task success, and hallucinated completions *(planned)*
-
-## Architecture
+## Current search architecture
 
 ```mermaid
 flowchart LR
-    subgraph Laptop["Laptop (RTX 5060, 8 GB)"]
-        VSCode["VS Code"]
-        Cline["Cline agent"]
-        Continue["Continue autocomplete"]
-        OllamaL["Ollama: qwen3:8b"]
+    Cline["Cline on Windows"] -->|"LAN / Streamable HTTP / port 3000"| MCP
+    subgraph XPS["Ubuntu XPS / Docker / <Internal-IP>"]
+        MCP["mcp-searxng"] -->|"search-network / port 8080"| SearXNG["SearXNG"]
     end
-
-    subgraph Server["Home server (GTX 1650, 4 GB, always on)"]
-        OllamaS["Ollama: qwen2.5-coder:1.5b"]
-        MCP["mcp-searxng"]
-        SearXNG["SearXNG"]
-        Logs["Audit logs"]
-    end
-
-    subgraph Desktop["Desktop (RTX 4060, 8 GB)"]
-        Bench["Benchmark node"]
-    end
-
-    VSCode --> Cline
-    VSCode --> Continue
-    Cline --> OllamaL
-    Cline -->|MCP| MCP
-    MCP --> SearXNG
-    SearXNG -->|queries| Web(("Web"))
-    Continue -->|LAN| OllamaS
-    Cline -.->|hooks| Logs
+    SearXNG --> Engines["External search engines"]
 ```
 
-### Hardware
+SearXNG supplies search results. The MCP server exposes search and page-reading tools to Cline. Self-hosting this service does not make the searches offline; queries still reach external search engines.
 
-| Node | Role | CPU | RAM | GPU |
-|------|------|-----|-----|-----|
-| Laptop | Agent workstation | Intel i7-13620H | 32 GB | RTX 5060 Laptop, 8 GB |
-| Home server | Always-on services, autocomplete model | Intel i7-9750H | 30 GB | GTX 1650 Mobile, 4 GB |
-| Desktop | Second benchmark node | Intel i7-14700F | 32 GB | RTX 4060, 8 GB |
+## Cline configuration
 
-### Design decisions
+Cline's active MCP settings are user-level, outside this repository:
 
-Each significant choice is documented as a decision record in [`docs/decisions/`](docs/decisions/), including:
+```text
+%USERPROFILE%\.cline\data\settings\cline_mcp_settings.json
+```
 
-- Cline over OpenCode as the agent harness
-- Self-hosted SearXNG over Brave, Perplexity, and Firecrawl for search
-- Splitting the agent model and autocomplete model across separate machines
-- Running Ollama natively on Windows instead of inside WSL
+Sanitized configuration example (substitute the server address for `<Internal-IP>` in your local settings):
 
-## Security
+```json
+{
+  "mcpServers": {
+    "searxng": {
+      "type": "streamableHttp",
+      "url": "http://<Internal-IP>:3000/mcp",
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
+```
 
-Ollama exposes its API with **no authentication**. Anyone who can reach port 11434 can use the models. The same is true of the SearXNG instance. Because of that, network restriction is the primary security control in this stack:
+The connection was previously changed from launching a local Docker MCP process to using the persistent remote service. Moving the project folders did not require another MCP settings change. Open `home-ai-lab` as the Cline workspace to use its project rules.
 
-- Ollama (`11434`) and SearXNG (`8080`) are allowed only from the local subnet via `ufw`
-- SSH to the server uses key-based authentication only
-- Secrets such as the SearXNG `secret_key` live in a gitignored `.env` file and are never committed
-- Nothing in this stack is exposed to the internet
+## Verification and current limitations
 
-See [`server/firewall/`](server/firewall/) for the exact rules.
+The October 9, 2026 migration check used an independent MCP client with Cline's configured endpoint. It verified:
+
+- TCP connectivity to `<Internal-IP>:3000`.
+- MCP initialization and discovery of four tools.
+- A `searxng_web_search` call returning three results.
+- A `web_url_read` call returning page content.
+
+The server identified itself as `ihor-sokoliuk/mcp-searxng` version `2.5.1`. The running Cline UI was not exercised during this check.
+
+Search works with partial engine coverage: Brave reported `too many requests`, and DuckDuckGo reported `CAPTCHA`. These warnings did not prevent results from being returned.
+
+Ports `8080` and `3000` are published for local-network use. Authentication, effective firewall restrictions, SSH hardening and public-internet reachability have not been verified as part of this work; they are not claimed as completed controls.
+
+## Epic overview
+
+| Epic | Current status |
+|------|----------------|
+| Local search infrastructure | Implemented manually on the Ubuntu server. |
+| Cline search integration | Remote MCP configured and endpoint tested; project rules migrated. |
+| Reproducible infrastructure | Not implemented in this repository. |
+| Network and access hardening | Controls not verified; LAN connectivity is working. |
+| Agent audit logging | Not implemented. |
+| Local model evaluation | No evaluation harness implemented. |
+| Second-brain integration | Not implemented. |
+
+Detailed plans, tasks and scheduling belong in GitHub Projects. This table summarizes scope and present status; it is not a task backlog.
 
 ## Repository layout
 
-```
-homelab-ai-stack/
+```text
+home-ai-lab/
 ├── README.md
-├── docs/
-│   ├── architecture.md
-│   ├── decisions/        # Architecture decision records
-│   └── lessons-learned.md
-├── server/               # Docker Compose, SearXNG config, Ollama override, firewall rules
-├── clients/              # Cline, Continue, and MCP configs, .clinerules
-├── hooks/                # Audit logging scripts
-├── evals/                # Evaluation harness, task definitions, results
-└── scripts/              # Per-node setup scripts
+├── CHANGELOG.md
+├── .gitignore
+├── .clinerules/
+│   ├── coding.md
+│   ├── memory_bank.md
+│   ├── privacy.md
+│   └── search.md
+└── memory-bank/
+    ├── activeContext.md
+    └── decisions.md
 ```
 
-## Getting started
-
-> Setup instructions will be filled in as each phase is completed and verified on a clean install.
-
-### Prerequisites
-
-- An NVIDIA GPU with current drivers
-- [Ollama](https://ollama.com)
-- [Docker](https://www.docker.com)
-- [VS Code](https://code.visualstudio.com) with the Cline and Continue extensions
-
-
-## Roadmap
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| 0 | Repo foundation, architecture, decision records | 🟡 In progress |
-| 1 | Infrastructure as code (Docker Compose, Ollama config, setup scripts) | ⬜ Planned |
-| 2 | Networking and security (DHCP reservation, SSH keys, firewall rules) | ⬜ Planned |
-| 3 | Client configuration (Cline, Continue, MCP, rules) | 🟡 Working locally, not yet in repo |
-| 4 | Agent audit trail via Cline hooks | ⬜ Planned |
-| 5 | Evaluation harness for local model tool use | ⬜ Planned |
-| 6 | Second brain vault built on the stack | ⬜ Planned |
-| 7 | Lessons learned write-up | ⬜ Planned |
-
-## Evaluation harness (planned)
-
-The goal is a repeatable test suite that sends agentic tasks directly to the Ollama API with tool definitions and scores each model on:
-
-- **Tool-call validity:** correct tool name and correctly named parameters
-- **Task success:** whether the requested outcome actually happened, such as a file existing and its code running
-- **Hallucinated completion:** the model claiming success when no tool was called
-- **Performance:** tokens per second, GPU offload percentage, and context size
-
-Results will be published here as a comparison table across models and hardware.
-
-## Lessons learned
-
-Building this surfaced several real-world issues, each documented with symptoms, root cause, and fix in [`docs/lessons-learned.md`](docs/lessons-learned.md). Highlights:
-
-- A discrete GPU that intermittently disappeared from Windows, traced to an out-of-date launch BIOS, a generic Windows Update driver, and Fast Startup preserving a bad hardware state
-- A local model inference running 100% on CPU because the GPU driver had silently failed
-- Context window settings pushing the model past available VRAM and spilling to CPU
-- An MCP server failing with `spawn docker ENOENT` because Docker was not on the editor's PATH
-- A search container that was running but unreachable because its port was never published
+The memory bank preserves working context and implementation decisions for Cline. Local reference documents, generated outputs and temporary work files are gitignored. Continue's configuration remains in `second-brain` and was not included in the Cline migration.
 
 ## Author
 
 **Jose de Lima**
+
 Lead Automation Engineer with 20+ years in QA and test automation, focused on AI/LLM test engineering and model evaluation.
