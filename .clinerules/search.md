@@ -1,0 +1,2 @@
+- For any web search, use the searxng_web_search MCP tool. Never fetch google.com or other search engine pages directly.
+- To read a page from search results, use the web_url_read tool.

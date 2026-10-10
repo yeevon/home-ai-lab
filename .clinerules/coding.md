@@ -1,0 +1,2 @@
+- Always use the write_to_file or replace_in_file tool to create or edit file contents. Never use PowerShell, Set-Content, Out-File, or any shell command to write code into a file.
+- Only use execute_command for running code, installing packages, or git operations — never for writing file content.
